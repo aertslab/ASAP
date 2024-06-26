@@ -1,0 +1,11 @@
+# Generic files to ignore.
+*~
+._*
+*.DS_Store
+.*
+
+# Do not ignore .gitignore
+!/.gitignore
+
+# Ignore IPython notebook checkpoints dirs.
+.ipynb_checkpoints
