@@ -1,0 +1,19 @@
+main:
+  analysis_dir: /staging/leuven/stg_00002/lcb/osiga/ASAP/analysis/wasp_indel_test_as_counts
+  # directory for WASP indel software
+  wasp_dir: /staging/leuven/stg_00002/lcb/osiga/software/wasp_indel
+  # bam files per sample, mapped to T2T genome
+  bam_dir: /staging/leuven/stg_00090/ASA/analysis/20240624_atac_preprocess/mapping/per_short_bc_id_merged
+data:
+  # combined phased BCF file (T2T genome, TellSeq samples not phased)
+  bcf_combined: /staging/leuven/stg_00090/ASA/analysis/20240701_patient_demultiplexing/WGS_chm13_BCFs_merged/WGS_chm13_BCFs_nanopore_tellseq.norm.remove_overlaps.missing2ref.snps.samples_per_genotype_ge3.bcf
+  # mapping of cell barcodes to cell types and donor IDs
+  cell2cluster: /lustre1/project/stg_00090/ASA/analysis/analysis_Olga/1_cingulate_cortex_MO_full/src/6_AS_counts/cell2cluster.tsv
+  # mapping of sample names to BAM paths
+  sample2bam: /staging/leuven/stg_00002/lcb/osiga/ASAP/analysis/AS_counts_delta04_peaks/sample2bam.tsv
+  # peaks selected for analysis (here - peaks with deltaISM>0.4 variants, liftOver from hg38 to T2T)
+  peaks: /staging/leuven/stg_00002/lcb/osiga/ASAP/analysis/AS_counts_delta04_peaks/peaks_delta04_t2t.bed
+  # T2T genome annotation
+  genome:
+    fasta: /staging/leuven/res_00001/genomes/homo_sapiens/CHM13v2_maskedY_rCRS/fasta/chm13v2.0_maskedY_rCRS.fa
+    chromsizes: /staging/leuven/res_00001/genomes/homo_sapiens/CHM13v2_maskedY_rCRS/fasta/chm13v2.0_maskedY_rCRS.chrom.sizes

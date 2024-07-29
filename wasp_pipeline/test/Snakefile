@@ -1,0 +1,215 @@
+import os
+import sys
+import re
+import yaml
+import glob
+import pandas as pd
+from snakemake.utils import min_version
+import glob
+# Enforce a minimum Snakemake version
+min_version("5.20")
+
+onstart:
+    print("##########################################\n")
+    print("# STARTING PIPELINE\n")
+    print("##########‰################################\n")
+    
+
+onsuccess:
+    print("##########################################\n")
+    print("# PIPELINE ENDED SUCCESSFULLY \n")
+    print("##########################################\n")
+
+ruleDisplayMessage = """\n\n####### START RULE EXECUTION ##########\n"""
+
+
+################################################################################
+######################## READ CONFIG ###########################################
+################################################################################
+
+configfile: "config.yaml"
+
+analysis_dir = config["main"]["analysis_dir"]
+wasp_dir = config["main"]["wasp_dir"]
+
+
+print("\nAll output of this pipeline will be written to:\n" + analysis_dir + "\n")
+print("\nWASP-indel is run from the following repository:\n" + wasp_dir + "\n")
+
+
+# Get clusters for each sample
+cluster_path = config["data"]["cell2cluster"]
+cell2cluster = pd.read_csv(cluster_path, sep = "\t")
+
+# Get list of samples
+samples = cell2cluster["sample"].drop_duplicates().tolist()
+clusters = cell2cluster["cluster"].drop_duplicates().tolist()
+print(f"Samples: {samples}")
+
+# split cluster names by "_" and extract numbers at the end of the strigs (num_cells)
+cell2cluster["num_cells"] = cell2cluster["cluster"].str.split("_").str[-1].str.extract("(\d+)").astype(int)
+clust_filt = cell2cluster[cell2cluster.num_cells > 100]["cluster"].drop_duplicates().tolist()
+print(len(clust_filt))
+
+#sample2cluster = cell2cluster[["sample", "cluster"]].drop_duplicates()
+#combine sample and cluster names in one column - these will be used to subset bam files
+#sample2cluster_names = (sample2cluster["sample"] + "_" + sample2cluster["cluster"]).tolist()
+
+
+################################################################################
+######################## MAIN ##################################################
+################################################################################
+
+
+rule all:
+    input:
+        analysis_dir + "/peaks_resized.bed",
+        analysis_dir + "/variants_subset.vcf.gz",
+        expand(analysis_dir + "/bam_subset_peaks/{sample}.bwa.out.fixmate.possorted.bam", sample = samples),
+        directory(analysis_dir + "/bam_subset_peaks_per_donor/"),
+        expand(analysis_dir + "/AS_counts/per_variant/{cluster}.variant_counts.txt.gz", cluster = clusters),
+        analysis_dir + "/test2target_regions.bed",
+        analysis_dir + "/test_variants2target_regions.txt",
+        expand(analysis_dir + "/AS_counts/per_region/{cluster}.variant_counts.txt.gz", cluster = clust_filt)
+        
+
+
+# Resize consensus peaks by adding {radius} bp to each side - this will be used for getting AS counts
+rule resize_peaks:
+    input: config["data"]["peaks"]
+    output: analysis_dir + "/peaks_resized.bed"
+    params:
+        radius = 750,
+        chromsizes = config["data"]["genome"]["chromsizes"]
+    threads: 1
+    message: ruleDisplayMessage + "Resizing peaks"
+    shell: """
+            bedtools slop -i {input} -g {params.chromsizes} \
+                          -b {params.radius} > {output}
+           """    
+
+# Subset BCF file for variants overlapping resized peaks; compress and index
+rule subset_bcf:
+    input:
+        bcf = config["data"]["bcf_combined"],
+        peaks = rules.resize_peaks.output
+    output: 
+        vcf = analysis_dir + "/variants_subset.vcf.gz"
+    threads: 1
+    message: ruleDisplayMessage + "Subsetting BCF file"
+    shell: """
+            bcftools view -R {input.peaks} {input.bcf} -O z -o {output.vcf};
+            tabix -p vcf {output.vcf}
+           """
+
+# Subset bam files for peaks and index them
+rule subset_bam:
+    input:
+        bam = config["main"]["bam_dir"] + "/{sample}/{sample}.bwa.out.fixmate.possorted.bam",
+        regions = rules.resize_peaks.output
+    output: analysis_dir + "/bam_subset_peaks/{sample}.bwa.out.fixmate.possorted.bam"
+    threads: 4
+    message: ruleDisplayMessage + "Subsetting BAM file"
+    shell: """
+           samtools view -b  --write-index --use-index  -L {input.regions} \
+           -o {output} {input.bam} 
+           """
+
+# Split bam files per donor and cell type
+rule split_bam:
+    input: expand(analysis_dir + "/bam_subset_peaks/{sample}.bwa.out.fixmate.possorted.bam", sample = samples)
+    output: directory(analysis_dir + "/bam_subset_peaks_per_donor/")
+    threads: 1
+    params:
+        script = "/staging/leuven/stg_00002/lcb/ghuls/software/single_cell_toolkit/rust/target/x86_64-unknown-linux-gnu/release/split_bams_per_cluster_noodles_debug_cleanup",
+        sample2bam = config["data"]["sample2bam"],
+        cell2cluster = config["data"]["cell2cluster"]
+    message: ruleDisplayMessage + "Splitting BAM file per donor and cell type"
+    shell: """
+            mkdir -p {output};
+            {params.script} -s {params.sample2bam} -c {params.cell2cluster} -o {output}/ -f &>> {output}/log;
+            samtools index -M {output}/*.bam
+           """
+
+# Get AS counts per donor and cell type
+rule get_AS_counts_per_variant:
+    input: 
+        bam = analysis_dir + "/bam_subset_peaks_per_donor/{cluster}.bam",
+        vcf = rules.subset_bcf.output.vcf
+    output: analysis_dir + "/AS_counts/per_variant/{cluster}.variant_counts.txt.gz"
+    threads: 1
+    params:
+        script = wasp_dir + "/mapping/get_counts.py",
+        outdir = analysis_dir + "/AS_counts/per_variant/"
+    message: ruleDisplayMessage + "Getting AS counts per variant"
+    shell: """
+            mkdir -p {params.outdir};
+            donor_id=$(echo "{input.bam}" | grep -oE 'ASA_[0-9]+');
+            python {params.script} \
+                    --bam {input.bam} \
+                    --vcf {input.vcf} \
+                    --sample $donor_id \
+                    --outprefix {params.outdir}/{wildcards.cluster} &>> {params.outdir}/{wildcards.cluster}.log;
+           """
+
+# Combine original peaks (test regions) with resized peaks (target regions)
+rule combine_peaks:
+    input:
+        peaks = config["data"]["peaks"],
+        resized_peaks = rules.resize_peaks.output
+    output: analysis_dir + "/test2target_regions.bed"
+    threads: 1
+    message: ruleDisplayMessage + "Combining initial and resized peaks"
+    shell: """
+            paste {input.peaks} {input.resized_peaks} | cut -f 1-3,6-7 > {output}
+           """
+
+
+# Generate filtered file containing test variants and target regions (this is done before splitting by cell type) - additional filtering can be applied later before testing
+rule get_target_regions:
+    input:
+        variants = expand(analysis_dir + "/AS_counts/per_variant/{cluster}.variant_counts.txt.gz", cluster = clusters),
+        regions = rules.combine_peaks.output,
+        bams = expand(analysis_dir + "/bam_subset_peaks_per_donor/{cluster}.bam", cluster = clusters)
+    output: analysis_dir + "/test_variants2target_regions.txt"
+    threads: 1
+    message: ruleDisplayMessage + "Filtering variants"
+    params:
+        script = wasp_dir + "/CHT_input/get_target_regions.py",
+        min_total = 20,
+        min_as = 5,    
+        min_minor = 0,
+        min_het = 0
+    shell: """
+           python {params.script} \
+                --regions {input.regions} \
+                --variants {input.variants} \
+                --bams {input.bams} \
+                --outfile {output} \
+                --min_het {params.min_het} \
+                --min_minor {params.min_minor} \
+                --min_as_read {params.min_as} \
+                --min_total_reads {params.min_total} &>> {output}.log
+           """
+
+
+# Get target region counts for each test variant, don't adjust for incorrect genotypes
+rule get_target_region_counts:
+    input:
+        variants = rules.get_AS_counts_per_variant.output,
+        bam = analysis_dir + "/bam_subset_peaks_per_donor/{cluster}.bam",
+        regions = rules.get_target_regions.output
+    output: analysis_dir + "/AS_counts/per_region/{cluster}.variant_counts.txt.gz"
+    threads: 1
+    message: ruleDisplayMessage + "Getting target region counts"
+    params:
+        script = wasp_dir + "/CHT_input/generate_cht_input.py",
+        outdir = analysis_dir + "/AS_counts/per_region/"
+    shell: """
+            mkdir -p {params.outdir};
+            python {params.script} \
+                --variants {input.variants} \
+                --bam {input.bam} \
+                --regions {input.regions} \
+                --outfile {output} 
+           """
