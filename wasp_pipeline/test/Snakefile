@@ -70,7 +70,8 @@ rule all:
         expand(analysis_dir + "/AS_counts/per_variant/{cluster}.variant_counts.txt.gz", cluster = clusters),
         analysis_dir + "/test2target_regions.bed",
         analysis_dir + "/test_variants2target_regions.txt",
-        expand(analysis_dir + "/AS_counts/per_region/{cluster}.variant_counts.txt.gz", cluster = clust_filt)
+        expand(analysis_dir + "/AS_counts/per_region/{cluster}.variant_counts.txt.gz", cluster = clust_filt),
+        analysis_dir + "/AS_counts/counts_per_region_combined.txt"
         
 
 
@@ -211,5 +212,19 @@ rule get_target_region_counts:
                 --variants {input.variants} \
                 --bam {input.bam} \
                 --regions {input.regions} \
+                --outfile {output} 
+           """
+
+# Parse target regions counts
+rule parse_target_region_counts:
+    input: expand(analysis_dir + "/AS_counts/per_region/{cluster}.variant_counts.txt.gz", cluster = clust_filt)
+    output: analysis_dir + "/AS_counts/counts_per_region_combined.txt"
+    threads: 1
+    message: ruleDisplayMessage + "Combining target region counts for all clusters"
+    params:
+        script = wasp_dir + "/CHT_input/process_region_counts.py",
+    shell: """
+            python {params.script} \
+                --counts {input} \
                 --outfile {output} 
            """
