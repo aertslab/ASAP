@@ -71,8 +71,16 @@ rule all:
         analysis_dir + "/test2target_regions.bed",
         analysis_dir + "/test_variants2target_regions.txt",
         expand(analysis_dir + "/AS_counts/per_region/{cluster}.variant_counts.txt.gz", cluster = clust_filt),
-        analysis_dir + "/AS_counts/counts_per_region_combined.txt"
+        analysis_dir + "/AS_counts/counts_per_region_combined.txt",
+        expand(analysis_dir + "/AS_counts/per_haplotype/{cluster}.hap1.bedgraph", cluster = clust_filt),
+        analysis_dir + "/peak_windows.bed",
+        expand(analysis_dir + "/AS_counts/per_haplotype_binned/{cluster}.{hap}.binned.bedgraph", cluster = clust_filt, hap = ["hap1", "hap2"]),
         
+
+
+################################################################################
+######################## COUNTS PER VARIANT ####################################
+################################################################################
 
 
 # Resize consensus peaks by adding {radius} bp to each side - this will be used for getting AS counts
@@ -152,6 +160,80 @@ rule get_AS_counts_per_variant:
                     --sample $donor_id \
                     --outprefix {params.outdir}/{wildcards.cluster} &>> {params.outdir}/{wildcards.cluster}.log;
            """
+
+
+
+################################################################################
+######################## ALLELIC TRACKS ########################################
+################################################################################
+
+
+rule split_counts_per_haplotype:
+    input: rules.get_AS_counts_per_variant.output
+    output: 
+        hap1 = analysis_dir + "/AS_counts/per_haplotype/{cluster}.hap1.bedgraph",
+        hap2 = analysis_dir + "/AS_counts/per_haplotype/{cluster}.hap2.bedgraph"
+    threads: 1
+    message: ruleDisplayMessage + "Splitting counts per haplotype"
+    params:
+        outdir = analysis_dir + "/AS_counts/per_haplotype/"
+    shell: """
+            mkdir -p {params.outdir};
+            zcat {input} | tail -n +5 | awk -F'\t' -v OFS='\t' '{{print $1, $2, $2+1, $11}}' > {output.hap1}_tmp;
+            zcat {input} | tail -n +5 | awk -F'\t' -v OFS='\t' '{{print $1, $2, $2+1, $12}}' > {output.hap2}_tmp;
+            bedtools sort -i {output.hap1}_tmp > {output.hap1};
+            bedtools sort -i {output.hap2}_tmp > {output.hap2};
+            rm {output.hap1}_tmp {output.hap2}_tmp;
+           """
+
+
+rule make_genome_windows:
+    input:
+        peaks = rules.resize_peaks.output,
+    output: analysis_dir + "/peak_windows.bed"
+    threads: 1
+    message: ruleDisplayMessage + "Making fixed size windows over peaks"
+    params:
+        window_size = 50
+    shell: """
+            bedtools makewindows -b {input.peaks} -w {params.window_size} > {output}_tmp;
+            bedtools sort -i {output}_tmp > {output};
+            rm {output}_tmp;
+           """
+
+rule sum_bg_signal_over_windows:
+    input:
+        bg = analysis_dir + "/AS_counts/per_haplotype/{cluster}.{hap}.bedgraph",
+        windows = rules.make_genome_windows.output
+    output: analysis_dir + "/AS_counts/per_haplotype_binned/{cluster}.{hap}.binned.bedgraph"
+    threads: 1
+    message: ruleDisplayMessage + "Summing bedgraph signal over genome windows"
+    params:
+        outdir = analysis_dir + "/AS_counts/per_haplotype_binned/"
+    shell: """
+            mkdir -p {params.outdir};
+            bedtools map -a {input.windows} -b {input.bg} -c 4 -o sum > {output};
+            sed -i 's/\./0/g' {output}
+           """
+
+# rule make_bw_from_bg:
+#     input: 
+#         bg = sum_bg_signal_over_window
+#         windows = rules.make_genome_windows.output
+#     output: analysis_dir + "/genome_windows.bw"
+#     threads: 1
+#     message: ruleDisplayMessage + "Making bigwig from bedgraph over genome windows"
+#     shell: """
+#             bedGraphToBigWig {output}.bedgraph {input.windows} {output}
+#            """
+
+
+################################################################################
+######################## COUNTS PER REGION #####################################
+################################################################################
+
+
+
 
 # Combine original peaks (test regions) with resized peaks (target regions)
 rule combine_peaks:
