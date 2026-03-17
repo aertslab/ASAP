@@ -1,18 +1,23 @@
 #!/bin/bash
 #SBATCH -n 1
-#SBATCH -c 25
-##SBATCH -mem 200G
-#SBATCH --time=10:00:00
+#SBATCH -c 15
+#SBATCH --time=00:30:00
 #SBATCH -A XX
-#SBATCH -p batch
+#SBATCH -p XX
 #SBATCH --cluster wice
-#SBATCH --job-name=modkit
-#SBATCH --array=1-125
-#SBATCH -o /logs/modkit_%j_%A_%a.out
-#SBATCH -e /logs/modkit_%j_%A_%a.err
+#SBATCH --job-name=modkit_tss
+#SBATCH --array=1-125%50
+#SBATCH -o logs/modkit_%x_%j.out
+#SBATCH -e logs/modkit_%x_%j.err
 
-# to tun modkit pileup and extract methylation information from the samples
-SAMPLES=(ASA_001B
+# script to calculate average TSS methylation for top and bottom 10% expressed genes 
+# in a given cell type, based on a bedmethyl file and a TSS bed file.
+
+# change the path to the singularity container/environment as needed. 
+SING=/singularity_images/images_Seppe/pycistopic_2.0a.sif 
+
+SAMPLES=(
+ASA_001B
 ASA_002B
 ASA_004B
 ASA_005B
@@ -136,17 +141,20 @@ ASA_186B
 ASA_187B
 ASA_188B
 ASA_189B
-ASA_190B)
-
-MODKIT_SING=../software/singularity/modkit_v0.4.3.sif
-fasta=/staging/leuven/res_00001/genomes/homo_sapiens/CHM13v2_maskedY_rCRS/indexes/cellranger/8.0.1/CHM13v2_maskedY_rCRS/fasta/genome.fa
+ASA_190B
+)
 
 sample=${SAMPLES[$SLURM_ARRAY_TASK_ID-1]}
-input_cram=/ASA/analysis/WGS_results_cram/${sample}/${sample}/cram_phased/${sample}_phased.cram
-output_bed_combined=/mod_bases/${sample}_cpg.bed
 
-ml HTSlib
-echo "running for sample: $sample"
-apptainer run -B /staging,/lustre1,/data,/local_scratch,/scratch $MODKIT_SING modkit pileup $input_cram $output_bed_combined --ref $fasta --cpg --combine-strands -t $SLURM_CPUS_ON_NODE
-bgzip $output_bed_combined
-echo "done for sample: $sample"
+# try input file - it should be the bed files created by 01_modkit_bed.slurm
+if [ -f /mod_bases/${sample}_cpg.bed.gz ]; then
+    echo "Input file found: /mod_bases/${sample}_cpg.bed.gz"
+    file="/mod_bases/${sample}_cpg.bed.gz"
+else
+    echo "Input file not found for sample ${sample}. Skipping."
+    exit 1
+fi
+
+# potentially add full path to the 03_methylation_tss_mean.py script if needed
+apptainer run -B /staging,/lustre1,/data,/local_scratch,/scratch $SING python 03_methylation_tss_mean.py --sample $file --cell_type Oligo
+

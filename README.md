@@ -12,8 +12,12 @@ This repostory hosts all the code for the analysis and figure generation for the
 
 # Data
 
-under construction
+- raw snRNA and snATAC data will be amde available via [CRN](https://cloud.parkinsonsroadmap.org/collections)
+- processed snATAC data is available via [Zenodo](https://zenodo.org/records/19052536)
+- aligned WGS data is available via EGA, please refer to study numbers in the preprint
+
+
 
 > **Note** <br>
-We tried to include all the code, but if you notice anything amiss, feel free to open an issue! 
+We tried to include all the code, but if you notice anything missing, or you encounter any issues, feel free to open an issue! 
 
