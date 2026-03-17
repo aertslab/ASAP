@@ -1,0 +1,152 @@
+#!/bin/bash
+#SBATCH -n 1
+#SBATCH -c 25
+##SBATCH -mem 200G
+#SBATCH --time=10:00:00
+#SBATCH -A XX
+#SBATCH -p batch
+#SBATCH --cluster wice
+#SBATCH --job-name=modkit
+#SBATCH --array=1-125
+#SBATCH -o /logs/modkit_%j_%A_%a.out
+#SBATCH -e /logs/modkit_%j_%A_%a.err
+
+# to tun modkit pileup and extract methylation information from the samples
+SAMPLES=(ASA_001B
+ASA_002B
+ASA_004B
+ASA_005B
+ASA_011B
+ASA_015B
+ASA_016B
+ASA_018B
+ASA_020B
+ASA_021B
+ASA_022B
+ASA_024B
+ASA_025B
+ASA_029B
+ASA_031B
+ASA_032B
+ASA_033B
+ASA_034B
+ASA_035B
+ASA_040B
+ASA_041B
+ASA_042B
+ASA_043B
+ASA_046B
+ASA_048B
+ASA_049B
+ASA_050B
+ASA_056B
+ASA_057B
+ASA_058B
+ASA_059B
+ASA_060B
+ASA_064B
+ASA_066B
+ASA_070B
+ASA_079B
+ASA_080B
+ASA_081B
+ASA_082B
+ASA_083B
+ASA_084B
+ASA_085B
+ASA_088B
+ASA_091B
+ASA_092B
+ASA_093B
+ASA_094B
+ASA_095B
+ASA_105B
+ASA_107B
+ASA_108B
+ASA_109B
+ASA_111B
+ASA_112B
+ASA_113B
+ASA_114B
+ASA_115B
+ASA_116B
+ASA_117B
+ASA_118B
+ASA_119B
+ASA_120B
+ASA_121B
+ASA_122B
+ASA_123B
+ASA_124B
+ASA_125B
+ASA_126B
+ASA_127B
+ASA_128B
+ASA_129B
+ASA_130B
+ASA_131B
+ASA_132B
+ASA_133B
+ASA_134B
+ASA_135B
+ASA_136B
+ASA_138B
+ASA_139B
+ASA_140B
+ASA_141B
+ASA_142B
+ASA_143B
+ASA_144B
+ASA_145B
+ASA_148B
+ASA_149B
+ASA_150B
+ASA_153B
+ASA_154B
+ASA_155B
+ASA_158B
+ASA_159B
+ASA_160B
+ASA_161B
+ASA_162B
+ASA_163B
+ASA_164B
+ASA_165B
+ASA_166B
+ASA_167B
+ASA_168B
+ASA_169B
+ASA_170B
+ASA_171B
+ASA_172B
+ASA_173B
+ASA_174B
+ASA_175B
+ASA_176B
+ASA_177B
+ASA_178B
+ASA_179B
+ASA_180B
+ASA_181B
+ASA_182B
+ASA_183B
+ASA_184B
+ASA_185B
+ASA_186B
+ASA_187B
+ASA_188B
+ASA_189B
+ASA_190B)
+
+MODKIT_SING=../software/singularity/modkit_v0.4.3.sif
+fasta=/staging/leuven/res_00001/genomes/homo_sapiens/CHM13v2_maskedY_rCRS/indexes/cellranger/8.0.1/CHM13v2_maskedY_rCRS/fasta/genome.fa
+
+sample=${SAMPLES[$SLURM_ARRAY_TASK_ID-1]}
+input_cram=/ASA/analysis/WGS_results_cram/${sample}/${sample}/cram_phased/${sample}_phased.cram
+output_bed_combined=/ASA/analysis/WGS_mod/modkit_cram/${sample}_cpg.bed
+
+ml HTSlib
+echo "running for sample: $sample"
+apptainer run -B /staging,/lustre1,/data,/local_scratch,/scratch $MODKIT_SING modkit pileup $input_cram $output_bed_combined --ref $fasta --cpg --combine-strands -t $SLURM_CPUS_ON_NODE
+bgzip $output_bed_combined
+echo "done for sample: $sample"
