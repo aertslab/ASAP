@@ -3,6 +3,10 @@
 - for the general processing of raw sequencing data to aligned CRAM file, please refer to the following GitHub repository: [NanoWGS](https://github.com/AlexanRNA/nanowgs)
 - in general, if R or Python environment is used, the environment info is summarised with `pip list` command in each file
 
+## WGS
+- scripts for population SV calling with Sniffles
+
+
 ## Modified bases extraction
 - to extract modified bases from CRAM files in `./mod_bases`
 - modkit version was dcontainerised and shared via dockerhub: `alexanrna/modkit:v0.4.3`
