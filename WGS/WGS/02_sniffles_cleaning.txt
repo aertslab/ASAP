@@ -1,0 +1,7 @@
+# list of commands to run in CLI to clean sniffles population call
+ml BCFtools/1.21
+bcftools view -i 'INFO/SVLEN>50 | INFO/SVLEN<-50 | INFO/SVTYPE="BND"' 20260202_sniffles_2.6_ASAP.pct0.5.vcf.gz | bcftools +fill-tags -- > tmp.tagged.vcf
+bgzip tmp.tagged.vcf
+tabix -p vcf tmp.tagged.vcf.gz
+bcftools filter -e "INFO/AF=1.0 | INFO/AF=0.0" tmp.tagged.vcf.gz -O z -o 20260202_sniffles_2.6_ASAP.pct0.5.cleaned.vcf.gz
+
