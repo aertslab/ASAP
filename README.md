@@ -1,6 +1,6 @@
 # Modeling cis-regulatory variation in human brain enhancers across a large Parkinson's Disease cohort
 
-This repostory hosts all the code for the analysis and figure generation for the preprint **LINK**
+This repostory hosts all the code for the analysis and figure generation for the [preprint](https://doi.org/10.64898/2026.03.15.711881)
 
 # Repository structure
 
@@ -13,7 +13,8 @@ This repostory hosts all the code for the analysis and figure generation for the
 # Data
 
 - raw snRNA and snATAC data will be amde available via [CRN](https://cloud.parkinsonsroadmap.org/collections)
-- processed snATAC data is available via [Zenodo](https://zenodo.org/records/19052536)
+- processed snRNA data is available via [SCope](https://scope.aertslab.org/#/ASAP_brain/*/welcome)
+- processed snATAC data is available via [Zenodo](https://zenodo.org/records/19052536) ([bigwigs](https://ucsctracks.aertslab.org/papers/ASAP_paper/))
 - aligned WGS data is available via EGA, please refer to study numbers in the preprint
 
 
