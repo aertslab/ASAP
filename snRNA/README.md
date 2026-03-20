@@ -5,6 +5,7 @@
 - to perform differential gene expression, go to `03_dge`
 - to perform eQTL analysis, go to `04_QTL`
 - there is also `plink` directory with plink scripts to prepare input for eQTL analysis
+- `scANVI` directory contains notebooks for MC and SN scANVI data preparation and model training
 
 > **Note** <br>
 The environmentds are either specified as `pip list` at the end of the script, or the docker container is mentioned at the beginning
