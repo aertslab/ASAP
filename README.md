@@ -6,7 +6,7 @@ This repostory hosts all the code for the analysis and figure generation for the
 
 - code to generate figures is under directory `./figures`
 - analysis related to snRNA and eQTL is to be found under `./snRNA`
-- analysis related to snATAC, caQTL anf ASCA is under `./snATAC`
+- analysis related to snATAC, caQTL and ASCA is under `./snATAC`
 - analysis pertinent to WGS and DNA methylation is under `./WGS`
 - any other analysis is under `./mixed_analysis`
 
