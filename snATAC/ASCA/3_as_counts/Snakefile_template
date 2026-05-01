@@ -1,0 +1,219 @@
+
+import os
+import glob
+import pandas as pd
+import yaml
+from snakemake.utils import min_version
+
+# Enforce a minimum Snakemake version
+min_version("5.20")
+
+"""
+environment used to run the pipeline:
+conda activate /lustre1/project/stg_00002/mambaforge/vsc35059/envs/genetic_variation_0624
+
+Dependencies installed in conda environment (genetic_variation_0624):
+    -python
+    -snakemake
+    -pysam
+    -sinto
+    -intervaltree
+
+software loaded from modules:
+    SAMtools/1.21-GCC-10.3.0
+    BEDTools/2.31.1-GCC-10.3.0
+
+"""
+
+onstart:
+    print("##########################################\n")
+    print("# STARTING PIPELINE\n")
+    print("##########‰################################\n")
+    
+
+onsuccess:
+    print("##########################################\n")
+    print("# PIPELINE ENDED SUCCESSFULLY \n")
+    print("##########################################\n")
+
+ruleDisplayMessage = """\n\n####### START RULE EXECUTION ##########\n"""
+
+os.makedirs("log", exist_ok=True)
+
+################################################################################
+######################## SET UP ################################################
+################################################################################
+
+def get_cluster_names_for_donors(donors, barcodes_path):
+    df = pd.read_csv(barcodes_path, sep = "\t")
+    df = df[df["donor_id"].isin(donors)]
+    clusters = df["cluster_name"].unique()
+    return clusters
+
+def match_donors_with_clusters(donors, barcodes_path, min_cells = 0, cell_types = None):
+    df = pd.read_csv(barcodes_path, sep = "\t")
+    if cell_types:
+        df = df[df.cell_type.isin(cell_types)]
+    df = df[(df.donor_id.isin(donors)) & (df.n_cells > min_cells) ][["donor_id", "cluster_name", "brain_region"]].drop_duplicates()
+    return (df.donor_id.to_list(), df.cluster_name.to_list(), df.brain_region.to_list())
+    
+################################################################################
+######################## GET INPUT #############################################
+################################################################################
+
+# read config file
+configfile: "config.yaml"
+
+analysis_dir = config["analysis_dir"]
+donor = config["donor_id"]
+
+
+# software
+wasp_dir = "/staging/leuven/stg_00090/ASA/src/wasp_indel_v1.0/"
+bedGraphToBigWig = "/staging/leuven/stg_00090/ASA/src/bedGraphToBigWig"
+
+# consensus peaks
+peaks_merged_ext = f"{analysis_dir}/merged_peaks_cc_sn_exended2500bp.bed"
+genome_windows = f"{analysis_dir}/merged_peak_windows_exended2500bp.bed"
+
+# directory with allelic bam files split by cluster (one subdirectory per donor)
+bam_dir = f"{analysis_dir}/allelic_bams_per_cluster"
+
+# filtered VCF of all donors, in peaks (SNPs and indels)
+vcf = f"{analysis_dir}/WGS_chm13_BCFs.missing_to_ref.norm.subset_peaks_exended2500bp.vcf.gz"
+
+# full list of selected barcodes with cluster asignments
+barcodes_path = "/lustre1/project/stg_00090/ASA/analysis/analysis_Olga/3_T2T_analysis/data/barcodes_per_donor/selected_barcodes_combined.tsv"
+
+# chromsizes
+chromsizes = "/staging/leuven/res_00001/genomes/homo_sapiens/CHM13v2_maskedY_rCRS/fasta/chm13v2.0_maskedY_rCRS.chrom.sizes"
+
+################################################################################
+######################## MAIN ##################################################
+################################################################################
+
+# list of cell type clusters per donor
+donors_list, clusters_list, brain_regions = match_donors_with_clusters([donor], barcodes_path, min_cells = 100)
+print(len(donors_list))
+
+rule all:
+    input:
+        expand(analysis_dir + "/AS_counts/per_variant/{brain_region}/{donor}/{cluster}.variant_counts.txt.gz", zip, brain_region = brain_regions, donor = donors_list, cluster = clusters_list),
+        expand(analysis_dir + "/AS_counts/per_haplotype/{brain_region}/{donor}/{cluster}.hap1.bw", zip, brain_region = brain_regions, donor = donors_list, cluster = clusters_list),
+        expand(analysis_dir + "/AS_counts/per_haplotype/{brain_region}/{donor}/{cluster}.hap2.bw", zip, brain_region = brain_regions, donor = donors_list, cluster = clusters_list),
+        expand(analysis_dir + "/AS_counts/per_region/{brain_region}/{donor}/{cluster}.variant_counts.txt.gz", zip, brain_region = brain_regions, donor = donors_list, cluster = clusters_list)
+
+
+
+################################################################################
+######################## AS counts per variant #################################
+################################################################################
+
+
+# Get AS counts per donor and cell type
+rule get_AS_counts_per_variant:
+    input: 
+        bam = bam_dir + "/{brain_region}/{donor}/{cluster}.bam",
+        vcf = vcf
+    output: analysis_dir + "/AS_counts/per_variant/{brain_region}/{donor}/{cluster}.variant_counts.txt.gz"
+    threads: 2
+    params:
+        script = wasp_dir + "/mapping/get_counts.py",
+        outdir = analysis_dir + "/AS_counts/per_variant/{brain_region}/{donor}"
+    message: ruleDisplayMessage + "Getting AS counts per variant"
+    shell: """
+            module load SAMtools/1.21-GCC-10.3.0;
+            samtools index {input.bam};
+            mkdir -p {params.outdir};
+            python {params.script} \
+                    --bam {input.bam} \
+                    --vcf {input.vcf} \
+                    --sample {wildcards.donor} \
+                    --outprefix {params.outdir}/{wildcards.cluster} &>> log/{wildcards.cluster}.get_counts.log;
+           """
+
+
+################################################################################
+######################## ALLELIC TRACKS ########################################
+################################################################################
+
+
+rule split_counts_per_haplotype:
+    input: rules.get_AS_counts_per_variant.output
+    output: 
+        hap1 = temp(analysis_dir + "/AS_counts/per_haplotype/{brain_region}/{donor}/{cluster}.hap1.bedgraph"),
+        hap2 = temp(analysis_dir + "/AS_counts/per_haplotype/{brain_region}/{donor}/{cluster}.hap2.bedgraph")
+    threads: 2
+    message: ruleDisplayMessage + "Splitting counts per haplotype for {wildcards.donor} in {wildcards.cluster}"
+    params:
+        outdir = analysis_dir + "/AS_counts/per_haplotype/{donor}",
+        script = wasp_dir + "/as_counts/split_allelic_counts_per_haplotype.py"
+    shell: """
+            mkdir -p {params.outdir};
+            zcat {input} | grep -E '^#|0\|1|1\|0'  > {input}_filtered.tsv;
+            python {params.script} \
+                    --counts {input} \
+                    --hap1 {output.hap1} \
+                    --hap2 {output.hap2};
+            rm {input}_filtered.tsv
+           """
+
+           
+
+# replace sum by max (getting max signal per window)
+rule bg_signal_over_windows:
+    input:
+        bg = analysis_dir + "/AS_counts/per_haplotype/{brain_region}/{donor}/{cluster}.{hap}.bedgraph",
+        windows = genome_windows
+    output: temp(analysis_dir + "/AS_counts/per_haplotype/{brain_region}/{donor}/{cluster}.{hap}.binned.bedgraph")
+    threads: 1
+    message: ruleDisplayMessage + "Summing bedgraph signal over genome windows"
+    params:
+        outdir = analysis_dir + "/AS_counts/per_haplotype/{brain_region}/{donor}"
+    shell: """
+            module load BEDTools/2.31.1-GCC-10.3.0;
+            bedtools map -a {input.windows} -b {input.bg} -c 4 -o max > {output};
+            sed -i 's/\./0/g' {output}
+           """
+
+
+
+# convert bedgraph to bigwig
+rule bg_to_bw:
+    input:
+        bg = rules.bg_signal_over_windows.output
+    output: analysis_dir + "/AS_counts/per_haplotype/{brain_region}/{donor}/{cluster}.{hap}.bw"
+    threads: 1
+    message: ruleDisplayMessage + "Converting bedgraph to bigwig"
+    params:
+        chromsizes = chromsizes
+    shell: """
+            {bedGraphToBigWig} {input.bg} {params.chromsizes} {output}
+           """
+
+
+################################################################################
+######################## AS counts per region ##################################
+################################################################################
+
+
+# Get target region counts for each test variant, don't adjust for incorrect genotypes
+rule get_target_region_counts:
+    input:
+        variants = analysis_dir + "/AS_counts/per_variant/{brain_region}/{donor}/{cluster}.variant_counts.txt.gz",
+        regions =  analysis_dir + "/variants_in_peaks.{brain_region}.txt.gz"
+    output: analysis_dir + "/AS_counts/per_region/{brain_region}/{donor}/{cluster}.variant_counts.txt.gz"
+    threads: 1
+    message: ruleDisplayMessage + "Getting target region counts"
+    params:
+        script = wasp_dir + "/CHT_input/aggregate_read_counts_per_regions.py",
+        outdir = analysis_dir + "/AS_counts/per_region/{brain_region}/{donor}"
+    shell: """
+            mkdir -p {params.outdir};
+            python {params.script} \
+                --as_only \
+                --variants {input.variants} \
+                --regions {input.regions} \
+                --outfile {output} 
+           """
+

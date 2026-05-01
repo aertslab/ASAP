@@ -1,0 +1,206 @@
+
+import os
+import glob
+import pandas as pd
+from snakemake.utils import min_version
+
+# Enforce a minimum Snakemake version
+min_version("5.20")
+
+"""
+environment used to run the pipeline:
+conda activate /lustre1/project/stg_00002/mambaforge/vsc35059/envs/genetic_variation_0624
+
+Dependencies installed in conda environment (genetic_variation_0624):
+    -python
+    -snakemake
+    -pysam
+    -sinto
+    -intervaltree
+
+software loaded from modules:
+    SAMtools/1.21-GCC-10.3.0
+    BEDTools/2.31.1-GCC-10.3.0
+
+"""
+
+onstart:
+    print("##########################################\n")
+    print("# STARTING PIPELINE\n")
+    print("##########‰################################\n")
+    
+
+onsuccess:
+    print("##########################################\n")
+    print("# PIPELINE ENDED SUCCESSFULLY \n")
+    print("##########################################\n")
+
+ruleDisplayMessage = """\n\n####### START RULE EXECUTION ##########\n"""
+
+os.makedirs("log", exist_ok=True)
+
+
+################################################################################
+######################## GET INPUT #############################################
+################################################################################
+
+# consensus peaks
+peaks = {
+    "CC": "/staging/leuven/stg_00090/ASA/analysis/2024_T2T_ATAC_analysis/CC/out/consensus_peak_calling/CC_CT2_consensus_regions.bed",
+    "SN": "/staging/leuven/stg_00090/ASA/analysis/2024_T2T_ATAC_analysis/SN/out/consensus_peak_calling/SN_CT2_consensus_regions.bed"
+}
+
+# chrom sizes file
+chrom_sizes = "/staging/leuven/res_00001/genomes/homo_sapiens/CHM13v2_maskedY_rCRS/fasta/chm13v2.0_maskedY_rCRS.chrom.sizes"
+
+# combined BCF of all donors (SNPs and indels)
+#bcf = "/staging/leuven/stg_00090/ASA/analysis/20240924_patient_demultiplexing/WGS_chm13_BCFs_merged/WGS_chm13_BCFs.missing_to_ref.norm.bcf"
+# latest file here:
+bcf = "/staging/leuven/stg_00090/ASA/analysis/20241004_patient_demultiplexing/WGS_chm13_BCFs_merged/WGS_chm13_BCFs.missing_to_ref.norm.bcf"
+
+
+# full list of selected barcodes with cluster asignments
+barcodes_path = "/lustre1/project/stg_00090/ASA/analysis/analysis_Olga/3_T2T_analysis/data/barcodes_per_donor/selected_barcodes_combined.tsv"
+
+# current analysis directory
+analysis_dir = "/staging/leuven/stg_00090/ASA/analysis/2024_T2T_ATAC_analysis"
+#outdir = "/staging/leuven/stg_00090/ASA/analysis/2024_T2T_ATAC_analysis/20250107_allelic_analysis"
+outdir = "/staging/leuven/stg_00090/ASA/analysis/2024_T2T_ATAC_analysis/20250505_allelic_analysis"
+
+
+brain_regions = ["CC", "SN"]
+donors_per_region = {}
+
+for brain_region in brain_regions:
+
+    # bam files after mappability filter
+    bam_dir = f"{analysis_dir}/20241612_mappability_filter/{brain_region}"
+
+    # selected donors - extract ASA_[0-9]+ from the bam files
+    donors = [re.search(r"ASA_[0-9]+", bam).group() for bam in glob.glob(f"{bam_dir}/*.mappability_filter.sorted.with_variants.bam")]
+    donors_per_region[brain_region] = donors
+
+    print(f"Found {len(donors)} donors for {brain_region} region")
+
+# window to extend peaks for getting allelic counts
+peak_ext_radius = 1000
+peak_window = 500 + 2 * peak_ext_radius
+
+################################################################################
+######################## MAIN ##################################################
+################################################################################
+
+print(donors_per_region["CC"])
+print(len(donors_per_region["CC"]))
+
+rule all:
+    input:
+        outdir  + f"/merged_peaks_cc_sn_exended{peak_window}bp.bed",
+        outdir + f"/merged_peak_windows_exended{peak_window}bp.bed",
+        outdir  + f"/WGS_chm13_BCFs.missing_to_ref.norm.subset_peaks_exended{peak_window}bp.vcf.gz",
+        expand(outdir + "/variants_in_peaks.{brain_region}.txt.gz", brain_region=["CC", "SN"]),
+        expand(outdir  + "/allelic_bams_per_cluster/{brain_region}/{donor}", brain_region = "CC", donor = donors_per_region["CC"]),
+        expand(outdir  + "/allelic_bams_per_cluster/{brain_region}/{donor}", brain_region = "SN", donor = donors_per_region["SN"]),
+        #expand(outdir  + "/allelic_bams_per_cluster/{brain_region}/{donor}", brain_region = "CC", donor = ["ASA_076"]),
+
+
+
+
+# resize peaks_cc and peaks_sn from 500 to 2500bp, then merge them (prevous version - 2114bp)
+rule resize_peaks:
+    input:
+        peaks_cc = peaks["CC"],
+        peaks_sn = peaks["SN"],
+        chrom_sizes = chrom_sizes
+    output: outdir  + f"/merged_peaks_cc_sn_exended{peak_window}bp.bed"
+    threads: 1
+    message: ruleDisplayMessage + "Resizing and merging peaks"
+    params:
+        resize_window = peak_ext_radius
+    shell: """
+            module load BEDTools/2.31.1-GCC-10.3.0;
+            bedtools slop -i {input.peaks_cc} -g {input.chrom_sizes} -b {params.resize_window} > {output}_cc;
+            bedtools slop -i {input.peaks_sn} -g {input.chrom_sizes} -b {params.resize_window} > {output}_sn;
+            cat {output}_cc {output}_sn | sort -k1,1 -k2,2n > {output}_cc_sn;
+            bedtools merge -i {output}_cc_sn > {output};
+            rm {output}_cc {output}_sn {output}_cc_sn;
+           """
+
+# make 50-bp windows for the merged peaks (used later for counting allelic reads)
+rule make_genome_windows:
+    input: rules.resize_peaks.output,
+    output: outdir + "/merged_peak_windows_exended{peak_window}bp.bed"
+    threads: 1
+    message: ruleDisplayMessage + "Making fixed size windows over peaks"
+    params:
+        window_size = 50
+    shell: """
+            bedtools makewindows -b {input} -w {params.window_size} > {output}_tmp;
+            bedtools sort -i {output}_tmp > {output};
+            rm {output}_tmp;
+           """
+
+
+# subset bcf for variants in merged peakset
+# Subset BCF file for variants overlapping resized peaks; compress and index
+rule subset_bcf:
+    input:
+        bcf =  bcf,
+        peaks = rules.resize_peaks.output
+    output: 
+        vcf = outdir  + "/WGS_chm13_BCFs.missing_to_ref.norm.subset_peaks_exended{peak_window}bp.vcf.gz"
+    threads: 1
+    message: ruleDisplayMessage + "Subsetting BCF file"
+    shell: """
+            module load BCFtools/1.21-GCC-10.3.0;
+            bcftools view -R {input.peaks} {input.bcf} -O z -o {output.vcf};
+            tabix -p vcf {output.vcf}
+           """
+
+
+# combine peaks from CC and SN with variants falling in these peaks
+rule combine_variants_with_peaks:
+    input:
+        vcf = outdir  + "/WGS_chm13_BCFs.missing_to_ref.norm.subset_peaks_exended2500bp.vcf.gz",
+        peaks = lambda wildcards: peaks[wildcards.brain_region]
+    output: outdir + "/variants_in_peaks.{brain_region}.txt.gz"
+    threads: 4
+    message: ruleDisplayMessage + "Subsetting BCF file"
+    shell: """
+            module load BEDTools/2.31.1-GCC-10.3.0;
+            bedtools intersect -a {input.peaks} -b {input.vcf} -wa -wb | \
+                awk -v OFS='\t' '{{print $7, $8, $10, $11, $2, $3}}' | \
+                grep -v "," | \
+                bgzip > {output}
+           """
+
+
+
+# get list of barcodes per donor
+rule select_donor_barcodes:
+    input: barcodes_path
+    output: temp(outdir  + "/barcodes_per_donor/{brain_region}/{donor}.barcodes_by_cluster.tsv")
+    params:
+        outdir = outdir  + "/barcodes_per_donor/{brain_region}"
+    shell:
+        """
+        mkdir -p {params.outdir};
+        grep {wildcards.brain_region}.*.{wildcards.donor} {input} | cut -f1,2 | tail -n +2 > {output}
+        """
+
+
+#split bam files containing only reads overlapping variants (after mappability filter)
+rule split_as_bam_per_cluster:
+    input:
+        #bam = bam_dir + "/{donor}.mappability_filter.sorted.with_variants.bam",
+        bam = analysis_dir + "/20241612_mappability_filter/{brain_region}/{donor}.mappability_filter.sorted.with_variants.bam",
+        barcodes = rules.select_donor_barcodes.output
+    output: directory(outdir  + "/allelic_bams_per_cluster/{brain_region}/{donor}")
+    params:
+        outdir = outdir  + "/allelic_bams_per_cluster/{brain_region}"
+    threads: 2
+    shell:
+        """
+        mkdir -p {params.outdir};
+        sinto filterbarcodes -b {input.bam} -c {input.barcodes} --outdir {output} -p {threads} &> log/{wildcards.donor}_sinto.log
+        """

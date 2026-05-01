@@ -1,0 +1,216 @@
+
+import os
+import glob
+from snakemake.utils import min_version
+
+# Enforce a minimum Snakemake version
+min_version("5.20")
+
+"""
+environment used to run the pipeline:
+conda activate /lustre1/project/stg_00002/mambaforge/vsc35059/envs/genetic_variation_0624
+
+WASP dependencies (installed in conda environment):
+
+software loaded from modules:
+    samtools v1.21
+    picard v3.1.1
+"""
+
+onstart:
+    print("##########################################\n")
+    print("# STARTING PIPELINE\n")
+    print("##########‰################################\n")
+    
+
+onsuccess:
+    print("##########################################\n")
+    print("# PIPELINE ENDED SUCCESSFULLY \n")
+    print("##########################################\n")
+
+ruleDisplayMessage = """\n\n####### START RULE EXECUTION ##########\n"""
+
+
+################################################################################
+######################## SET UP ################################################
+################################################################################
+
+def get_donor_id_from_bam(bam_file):
+    return bam_file.split("/")[-1].split(".")[0]
+
+def get_sample_name_from_bam(bam_file):
+    return bam_file.split("/")[-2]
+
+def get_bam_files_per_donor(donor, bam_files):
+    return [bam_file for bam_file in bam_files if donor in bam_file]
+
+def get_donor_vcf(donor, vcf_dir):
+    vcf_path = glob.glob(vcf_dir + f"/{donor}*/{donor}*/longphase_phase/{donor}*_longphase.vcf.gz")[0]
+    return vcf_path
+
+def get_donor_region_pattern(bam_file):
+    pattern = os.path.join(os.path.basename(os.path.dirname(bam_file)), os.path.basename(bam_file).replace(".bam", ""))
+    return pattern 
+
+################################################################################
+######################## GET INPUT #############################################
+################################################################################
+
+# input directories
+
+configfile: "config.yaml"
+
+
+wasp_dir = config["wasp_dir"]
+vcf_dir = config["vcf_dir"]
+bam_dir = config["bam_dir"]
+outdir = config["outdir"]
+
+os.makedirs(outdir, exist_ok=True)
+
+donor_id = config["donor_id"]
+brain_region = config["brain_region"]
+
+donor_pattern = brain_region + "/" + donor_id
+
+
+#scratch_dir = "/scratch/leuven/350/vsc35059/mappability_filter"
+# # input data
+# brain_regions = ["CC", "SN"]
+# bam_files = []
+# for region in brain_regions:
+#     bam_files.extend(glob.glob(os.path.join(bam_dir, region, "*.bam")))
+# # all unique donor ids
+# donors = list(set([get_donor_id_from_bam(bam_file) for bam_file in bam_files]))
+# selected donors (ASA_171 and ASA_163 - ca. 40 Gb, ASA_051 - ca. 8 Gb)
+#donors = ["ASA_171", "ASA_163", "ASA_051"] 
+# donor_patterns = [get_donor_region_pattern(bam_file) for bam_file in bam_files[0:6]]
+# print(f"Total number of donors to process: {len(donor_patterns)}")
+# print(donor_patterns)
+
+################################################################################
+########################### MAIN ###############################################
+################################################################################
+
+
+rule all:
+    input:
+        expand(outdir + "/{donor_pattern}.mappability_filter.sorted.full.bam", donor_pattern = donor_pattern),
+        expand(outdir + "/{donor_pattern}.mappability_filter.sorted.with_variants.bam", donor_pattern = donor_pattern)
+
+
+
+# Place alignments not overlapping variants in a BAM file and extract reads overlapping variants, and their allele flipped versions, to a fastq file.
+# Using VCF file per donor (not merged)
+rule filter_first_alignment:
+    input:
+        bam = bam_dir + "/{brain_region}/{donor}.bam",
+        vcf = lambda wildcards : get_donor_vcf(wildcards.donor, vcf_dir)
+    output:
+        bam = temp(outdir + "/{brain_region}/{donor}.no_variants.bam"),
+        fastq = temp(outdir + "/{brain_region}/{donor}.allele_flipped.fq.gz"),
+        info = outdir + "/{brain_region}/{donor}.allele_flipped_log.txt"
+    params:
+        prefix = outdir + "/{brain_region}/{donor}",
+        mapq = 10,
+        max_vars = 8,
+        max_seqs = 256
+    shell:
+        """
+        python {wasp_dir}/mapping/generate_variant_reads.py \
+                     --min_mapq {params.mapq} \
+                     --max_vars {params.max_vars} \
+                     --max_seqs {params.max_seqs} \
+                     --bam {input.bam} \
+                     --vcf {input.vcf} \
+                     --out_prefix {params.prefix} &>> {params.prefix}.allele_flipped_stdout.txt
+        """
+
+
+# Align allele flipped reads to the reference genome
+# Specific adaptations for the allele flipped bam files (in bwa_mem2_mapping.sh): 
+#  -p flag for interleaved paired-end reads in a single fastq file
+#  -R "@RG\tID:${fastq_basename_prefix}\tSM:${sample_id}\tLB:${library_id}__${sample_id}\tPL:ILLUMINA" - different from original bam file
+rule align_allele_flipped:
+    input:
+        fastq = rules.filter_first_alignment.output.fastq
+    output:
+        bam = temp(outdir + "/{brain_region}/{donor}.allele_flipped.bwa.out.fixmate.bam")
+    params:
+        outdir = outdir + "/{brain_region}/",
+        prefix = outdir + "/{brain_region}/{donor}"
+    shell:
+        """
+        bash bwa_mem2_mapping.sh {input.fastq} {wildcards.donor} {params.outdir} 
+        """
+
+
+# Sort the remapped BAM file with allele flipped reads
+# Important notes: use -SO queryname to keep together reads with allele flips
+rule sort_remapped_bam:
+    input:
+        bam = rules.align_allele_flipped.output.bam
+    output:
+        bam = temp(outdir + "/{brain_region}/{donor}_remapped_sorted.bam"),
+    params:
+        outdir = outdir + "/{brain_region}",
+        tmpdir = "/scratch/leuven/350/vsc35059/picard"
+    message: "Sort remapped bam file for {wildcards.donor}"
+    shell:
+        """
+        module load picard/3.1.1-Java-19.0.2; 
+        java -jar $EBROOTPICARD/picard.jar SortSam -I {input.bam} -O {output.bam} -SO queryname -CREATE_INDEX true --TMP_DIR {params.tmpdir};
+        """
+
+
+
+# # Extract reads for which the original and allele flipped version align to the same location
+rule filter_second_alignment:
+    input: rules.sort_remapped_bam.output
+    output:
+        bam = temp(outdir + "/{brain_region}/{donor}.consistent.bam"),
+        log = outdir + "/{brain_region}/{donor}.second_alignment_log.txt"
+    params:
+        prefix = outdir + "/{brain_region}/{donor}",
+        mapq = 10
+    shell:
+        """
+        python {wasp_dir}/mapping/filter_remapped_reads.py  \
+               --min_mapq {params.mapq} {input} {params.prefix}
+        """
+
+
+# Merge all passed alignments
+# Important notes: use -r option to keep the read group information from both files in the output file
+rule merge_filt_bams:
+    input:
+        bam1 = rules.filter_first_alignment.output.bam,
+        bam2 = rules.filter_second_alignment.output.bam
+    output: 
+        bam_merged = temp(outdir + "/{brain_region}/{donor}.mappability_filter.full.bam"),
+        bam_sorted = outdir + "/{brain_region}/{donor}.mappability_filter.sorted.full.bam"
+    threads: 16
+    shell:
+        """
+        module load SAMtools/1.21-GCC-10.3.0;
+        module load picard/3.1.1-Java-19.0.2; 
+        samtools merge -r -O BAM -@ {threads} {output.bam_merged} {input.bam1} {input.bam2};
+        java -jar $EBROOTPICARD/picard.jar SortSam I={output.bam_merged} O={output.bam_sorted} SO=coordinate CREATE_INDEX=true   
+        """
+
+
+# Get sorted bam file containing reads that overlap variants (after mappability filter)
+rule sort_second_alignment:
+    input:
+        bam = rules.filter_second_alignment.output.bam
+    output:
+        bam = outdir + "/{brain_region}/{donor}.mappability_filter.sorted.with_variants.bam",
+    params:
+        outdir = outdir + "/{brain_region}",
+        tmpdir = "/scratch/leuven/350/vsc35059/picard"
+    message: "Sort bam file for {wildcards.donor}, index and get stats"
+    shell:
+        """
+        module load picard/3.1.1-Java-19.0.2;
+        java -jar $EBROOTPICARD/picard.jar SortSam -I {input.bam} -O {output.bam} -SO coordinate -CREATE_INDEX true --TMP_DIR {params.tmpdir};
+        """

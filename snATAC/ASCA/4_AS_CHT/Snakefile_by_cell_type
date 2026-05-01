@@ -1,0 +1,141 @@
+import os
+import glob
+import pandas as pd
+from snakemake.utils import min_version
+
+# Enforce a minimum Snakemake version
+min_version("5.20")
+
+"""
+environment used to run the pipeline:
+conda activate /lustre1/project/stg_00002/mambaforge/vsc35059/envs/genetic_variation_0624
+
+Dependencies installed in conda environment (genetic_variation_0624):
+    -python
+    -snakemake
+    -pysam
+    -sinto
+    -intervaltree
+
+software loaded from modules:
+    SAMtools/1.21-GCC-10.3.0
+    BEDTools/2.31.1-GCC-10.3.0
+
+"""
+
+onstart:
+    print("##########################################\n")
+    print("# STARTING PIPELINE\n")
+    print("##########‰################################\n")
+    
+
+onsuccess:
+    print("##########################################\n")
+    print("# PIPELINE ENDED SUCCESSFULLY \n")
+    print("##########################################\n")
+
+ruleDisplayMessage = """\n\n####### START RULE EXECUTION ##########\n"""
+
+os.makedirs("log", exist_ok=True)
+
+################################################################################
+######################## SET UP ################################################
+################################################################################
+
+def get_count_files_per_region_and_cell_type(analysis_dir, cell_type, brain_region):
+
+    files = glob.glob(f"{analysis_dir}/AS_counts/per_region/{brain_region}/*/*{cell_type}*")
+    return files
+
+################################################################################
+######################## GET INPUT #############################################
+################################################################################
+
+
+analysis_dir = "/staging/leuven/stg_00090/ASA/analysis/2024_T2T_ATAC_analysis/20250107_allelic_analysis"
+wasp_dir = "/staging/leuven/stg_00090/ASA/src/wasp_indel_v1.0/"
+
+# cell_type = "Micro-PVM"
+# brain_region = "CC"
+
+# read config file
+configfile: "config.yaml"
+
+cell_type = config["cell_type"]
+brain_region = config["brain_region"]
+
+
+################################################################################
+######################## MAIN ##################################################
+################################################################################
+
+chroms = ["chr" + str(i) for i in range(1, 23)]
+
+rule all:
+    input:
+        expand(analysis_dir + "/AS_CHT/{brain_region}/{cell_type}/input_files.txt", brain_region = [brain_region], cell_type = [cell_type]),
+        expand(analysis_dir + "/AS_CHT/{brain_region}/{cell_type}/as_coef.txt", brain_region = [brain_region], cell_type = [cell_type]),
+        expand(analysis_dir + "/AS_CHT/{brain_region}/{cell_type}/cht_results_as_{chrom}.txt", brain_region = [brain_region], cell_type = [cell_type], chrom = chroms),
+        expand(analysis_dir + "/AS_CHT/{brain_region}/{cell_type}/cht_results_as_permuted_{chrom}.txt", brain_region = [brain_region], cell_type = [cell_type], chrom = chroms)
+
+rule make_input_file_list:
+    input:
+        lambda wildcards: get_count_files_per_region_and_cell_type(analysis_dir, wildcards.cell_type, wildcards.brain_region)
+    output:
+        analysis_dir + "/AS_CHT/{brain_region}/{cell_type}/input_files.txt"
+    params:
+        outdir =  analysis_dir + "/AS_CHT/{brain_region}/{cell_type}"
+    threads: 1
+    shell:"""
+        mkdir -p {params.outdir};
+        ls {input} > {output}
+        """
+
+rule fit_as_coef:
+    input: rules.make_input_file_list.output
+    output: analysis_dir + "/AS_CHT/{brain_region}/{cell_type}/as_coef.txt"
+    params:
+        script = wasp_dir + "/CHT/fit_as_coefficients.py",
+    threads: 2
+    shell:"""
+        python {params.script} {input} {output} -r --chrom_list chrX chrY chrM --aggregate_per_region
+        """
+    
+
+rule as_test:
+    """run the allele-specific part of the combined test"""
+    input:
+        as_coef = rules.fit_as_coef.output,
+        cht_input = rules.make_input_file_list.output
+    output: analysis_dir + "/AS_CHT/{brain_region}/{cell_type}/cht_results_as_{chrom}.txt"
+    wildcard_constraints:
+        chrom = "|".join(chroms)
+    params:
+        min_as_count = 50,
+        script = wasp_dir + "/CHT/combined_test.py"
+    shell:
+        """python {params.script} \
+            --min_as_counts {params.min_as_count} \
+            --chromosome {wildcards.chrom} \
+            --as_only --as_disp {input.as_coef} \
+            {input.cht_input} {output}
+        """
+
+rule as_test_permuted:
+    """run the allele-specific part of the combined test on permuted genotypes"""
+    input:
+        as_coef = rules.fit_as_coef.output,
+        cht_input = rules.make_input_file_list.output
+    output: analysis_dir + "/AS_CHT/{brain_region}/{cell_type}/cht_results_as_permuted_{chrom}.txt"
+    wildcard_constraints:
+        chrom = "|".join(chroms)
+    params:
+        min_as_count = 50,
+        script = wasp_dir + "/CHT/combined_test.py"
+    shell:
+        """python {params.script} --shuffle \
+            --min_as_counts {params.min_as_count} \
+            --chromosome {wildcards.chrom} \
+            --as_only --as_disp {input.as_coef} \
+            {input.cht_input} {output}
+        """
