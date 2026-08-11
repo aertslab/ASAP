@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DONOR_BCF=""
+PASSTHROUGH_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --donor-bcf)
+            DONOR_BCF="$2"
+            shift 2
+            ;;
+        *)
+            PASSTHROUGH_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
 echo
 echo " Running proximity (LD) block setup."
 echo " This can take half an hour if all the steps have to be executed."
@@ -26,7 +42,7 @@ mkdir -p 2_source
 mkdir -p 3_variants
 mkdir -p 4_regions
 mkdir -p 5_figs
-mkdir -p 6_trash
+mkdir -p 6_enrichment
 
 # Download T2T fasta
 echo " [setup] Checking T2T genome..."
@@ -101,7 +117,8 @@ fasta = pysam.FastaFile('2_source/T2T.fa')
 lo = LiftOver('hg38','Hs1')
 leads[['T2T','T2T_ref','T2T_alt']] = leads.apply(lambda r: liftover_variant('chr' + str(r['CHR']), r['BP'], r['Reference allele'], r['Alternative allele'], fasta, lo), result_type='expand', axis=1)
 leads['ID'] = leads.apply(lambda r: 'chr' + str(r['CHR']) + '_' + str(r['T2T']), axis=1)
-leads.to_csv('2_source/GP2_leads.tsv', sep='\t', index=None)"
+leads[['CHR','BP','Nearest Gene', 'Reference allele','Alternative allele','ID','Effect allele frequency']].rename(
+        columns={'Reference allele':'ref','Alternative allele':'alt','Effect allele frequency':'AF'}).to_csv('2_source/GP2_leads.tsv', sep='\t', index=None)"
 fi
 
 # R-squared of leads to 1KG using plink
@@ -123,12 +140,21 @@ if ! [ -f 1_plink/linkage.vcor ]; then
 fi
 
 # Check how many lead variants are in 1KG T2T after lifting to T2T
-if ! [ -f 6_trash/all_hs1_ids.txt ]; then
-    grep -v '#' 1_plink/1KG.T2T.pvar | awk '{ print $3 }' | sort > 6_trash/all_hs1_ids.txt
+echo " [setup] Finding 1KG & GWAS lead overlap..."
+if ! [ -f 3_variants/leads_in_1kg.txt ]; then
+    grep -v '#' 1_plink/1KG.T2T.pvar | awk '{ print $3 }' | sort > 3_variants/all_hs1_ids.txt
+    sort 2_source/GP2_leads.id > 3_variants/all_lead_ids.txt
+    join 3_variants/all_lead_ids.txt 3_variants/all_hs1_ids.txt > 3_variants/leads_in_1kg.txt
+    N=$( wc -l 3_variants/leads_in_1kg.txt)
+    echo " [setup] Found $N leads in 1000 Genomes after lifting to T2T and converting with plink"
 fi
-sort 2_source/GP2_leads.id > 6_trash/all_lead_ds.txt
-N=$(join 6_trash/all_lead_ds.txt 6_trash/all_hs1_ids.txt | wc -l)
-echo " [setup] Found $N leads in 1000 Genomes after lifting to T2T and converting with plink"
+
+# Check wether donor variants are copied here
+echo " [setup] Checking donor bcf prescense..."
+if ! [ -f 2_source/donor_vars.bcf ]; then
+    echo "          - Copying donor variant bcf localy..."
+    cp $DONOR_BCF 2_source/donor_vars.bcf
+fi
 
 echo
 echo " Done."
