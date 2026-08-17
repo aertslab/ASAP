@@ -73,6 +73,7 @@ fi
 echo " [setup] Checking pgen files..."
 if ! [ -f 1_plink/1KG.T2T.pvar ]; then
     echo "          - Running plink on 1KG to make pgen files... [see 1_plink/1KG.T2T.log]"
+    echo
     1_plink/plink2 \
         --bcf 1_plink/1KG.T2T.bcf.gz \
         --geno 0.05 \
@@ -86,18 +87,21 @@ if ! [ -f 1_plink/1KG.T2T.pvar ]; then
         --output-chr chrM \
         --set-all-var-ids '@_#' 
         # --silent
+        echo
 fi
 
 # Download GWAS summary stats
 echo " [setup] Checking GWAS summary files..."
-if ! [ -f 2_source/GWAS_raw.tsv ]; then
+if ! [ -f 2_source/GWAS.tsv ]; then
     echo "          - Downloading GWAS summary files...   [https://api.kpndataregistry.org/api/d/7j5797]"
     wget -q -O 2_source/GWAS_raw.zip https://api.kpndataregistry.org/api/d/7j5797
     unzip -q 2_source/GWAS_raw.zip -d 2_source/
     gunzip -q 2_source/GP2_euro_ancestry_meta_analysis_2024/GP2_ALL_EUR_ALL_DATASET_HG38_12162024.txt.gz -c > 2_source/GWAS_raw.tsv
     rm 2_source/GP2_euro_ancestry_meta_analysis_2024 -r
+    rm -rf 2_source/__MACOSX/
     conda run -n PROX --no-capture-output python -c "
 import numpy as np
+import pandas as pd
 GWAS = pd.read_csv('2_source/GWAS_raw.tsv', sep='\t')
 GWAS['logp'] = -np.log(GWAS['p_value'])
 GWAS['sig'] = GWAS['p_value'] < 5*10**-8
@@ -110,8 +114,10 @@ if ! [ -f 2_source/GP2_leads.tsv ]; then
     echo "          - Downloading GWAS leads...   [https://www.medrxiv.org/content/medrxiv/early/2025/03/17/2025.03.14.24319455/DC2/embed/media-2.xlsx?download=true]"
     wget -q -O 2_source/GP2_leads.xlsx https://www.medrxiv.org/content/medrxiv/early/2025/03/17/2025.03.14.24319455/DC2/embed/media-2.xlsx?download=true
     conda run -n PROX --no-capture-output python -c "
+import pysam
 import pandas as pd
-from lift import *
+from pyliftover import LiftOver
+from utils import liftover_variant
 leads = pd.read_excel('2_source/GP2_leads.xlsx', sheet_name='Table S3')
 fasta = pysam.FastaFile('2_source/T2T.fa')
 lo = LiftOver('hg38','Hs1')
@@ -127,6 +133,7 @@ if ! [ -f 1_plink/linkage.vcor ]; then
     echo "          - Calculating R2 of leads to 1KG variants using plink..."
     # awk -F'\t' 'NR>1 { print $1 }' 2_source/GP2_leads.tsv | sed 's/:/_/g'  > 2_source/GP2_leads.id
     awk -F'\t' 'NR>1 { print $30 }' 2_source/GP2_leads.tsv > 2_source/GP2_leads.id
+    echo
     1_plink/plink2 \
         --pfile 1_plink/1KG.T2T \
         --r2-phased \
@@ -137,6 +144,7 @@ if ! [ -f 1_plink/linkage.vcor ]; then
         --ld-snp-list 2_source/GP2_leads.id \
         --out 1_plink/linkage
         # --silent
+        echo
 fi
 
 # Check how many lead variants are in 1KG T2T after lifting to T2T
@@ -157,5 +165,7 @@ if ! [ -f 2_source/donor_vars.bcf ]; then
 fi
 
 echo
-echo " Done."
+echo " Setup done."
+echo
+echo " ======================================================================================================================"
 echo

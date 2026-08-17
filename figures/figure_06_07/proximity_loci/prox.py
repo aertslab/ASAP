@@ -34,100 +34,170 @@ def load_leads(leads_path: Path) -> pd.DataFrame:
 
 def load_r2(r2_path: Path) -> pd.DataFrame:
     r2 = pd.read_csv(r2_path, sep="\t")
-    print(f" [r2] {r2.shape[0]} r2 matches between leads and 1KG variants")
+    print(f" [r2] {r2.shape[0]} r2 matches between leads and 1KG variants [{r2_path}]")
     return r2
 
 
-def build_raw_regions(leads: pd.DataFrame, r2: pd.DataFrame, r2_threshold: float,  save_path:str=None) -> pd.DataFrame:
+def build_raw_regions(leads: pd.DataFrame, r2: pd.DataFrame, r2_threshold: float, save_path: str = None, leads_in_1kg:str = None) -> pd.DataFrame:
     """
     Demarcate lead-variant centered regions for a single r2 threshold.
     Algorithm: Find the furthest variant 'left' and 'right' of the lead with an r2 to that lead
     being higher than the threshold.
     r2_threshold: float, e.g. 0.6 (rerun the script with a different value to compare thresholds).
     """
-    ids_a = set(r2["ID_A"])
-    linked = r2[r2["PHASED_R2"] > r2_threshold]
+    # Pre-index leads and load 1kg once
+    leads_idx     = leads.set_index("ID")
+    leads_in_1kg  = set(pd.read_csv(leads_in_1kg, header=None, names=['ID'])['ID'])
+    linked        = r2[r2["PHASED_R2"] > r2_threshold]
+
+    # Pre-group linked by lead so we don't filter inside the loop
+    linked_grouped = {lead_id: grp for lead_id, grp in linked.groupby("ID_A")}
+
     regions = []
-
-    leads_in_1kg = pd.read_csv('3_variants/leads_in_1kg.txt', header=None, names=['ID'])
-
     for lead_id in set(leads["ID"]):
+        chr_ = leads_idx.loc[lead_id, "CHR"]
+        lead = leads_idx.loc[lead_id, "BP"]
 
-        # If lead id NOT in subset of 1000G
-        if lead_id not in list(leads_in_1kg['ID']):
-            chr_ = leads[leads["ID"] == lead_id]["CHR"].values[0]
-            lead = leads[leads["ID"] == lead_id]["BP"].values[0]
+        # Not in 1KG
+        if lead_id not in leads_in_1kg:
             regions.append({
-                "chr": chr_,
-                "lead_id": lead_id,
-                "lead_bp": lead,
-                "left_raw": lead,
-                "right_raw": lead,
-                "left_dist": 0,
-                "right_dist": 0,
-                "size": 0,
-                "r2_threshold": r2_threshold,
-                "1kg": False,
+                "chr": chr_, "lead_id": lead_id, "lead_bp": lead,
+                "left_raw": lead, "right_raw": lead,
+                "left_dist": 0, "right_dist": 0, "size": 0,
+                "r2_threshold": r2_threshold, "1kg": False,
             })
             continue
 
-        r2_block = linked[linked["ID_A"] == lead_id]
-        linked_ids = set(r2_block["ID_A"])
+        r2_block = linked_grouped.get(lead_id)
 
-        # Has no r2 with any variant at this threshold
-        if lead_id not in linked_ids:
-            chr_ = leads[leads["ID"] == lead_id]["CHR"].values[0]
-            lead = leads[leads["ID"] == lead_id]["BP"].values[0]
+        # In 1KG but no r2 partners at this threshold
+        if r2_block is None:
             regions.append({
-                "chr": chr_,
-                "lead_id": lead_id,
-                "lead_bp": lead,
-                "left_raw": lead,
-                "right_raw": lead,
-                "left_dist": 0,
-                "right_dist": 0,
-                "size": 0,
-                "r2_threshold": r2_threshold,
-                "1kg": True,
+                "chr": chr_, "lead_id": lead_id, "lead_bp": lead,
+                "left_raw": lead, "right_raw": lead,
+                "left_dist": 0, "right_dist": 0, "size": 0,
+                "r2_threshold": r2_threshold, "1kg": True,
             })
             continue
 
-        # Has r2 with at leats one variant at this threshold
-        chr_ = r2_block["#CHROM_A"].values[0]
-        lead = r2_block["POS_A"].values[0]
-        left_border = min([lead, min(r2_block["POS_B"])])
-        right_border = max([lead, max(r2_block["POS_B"])])
-        ld_left = max([0, r2_block["POS_A"].values[0] - left_border])
-        ld_right = max([0, right_border - r2_block["POS_A"].values[0]])
+        # Has r2 partners
+        pos_b        = r2_block["POS_B"].values
+        left_border  = min(lead, pos_b.min())
+        right_border = max(lead, pos_b.max())
+        ld_left      = max(0, lead - left_border)
+        ld_right     = max(0, right_border - lead)
         regions.append({
-            "chr": chr_,
+            "chr": r2_block["#CHROM_A"].iat[0],
             "lead_id": lead_id,
-            "lead_bp": lead,
-            "left_raw": left_border,
-            "right_raw": right_border,
-            "left_dist": ld_left,
-            "right_dist": ld_right,
+            "lead_bp": r2_block["POS_A"].iat[0],
+            "left_raw": left_border, "right_raw": right_border,
+            "left_dist": ld_left, "right_dist": ld_right,
             "size": ld_left + ld_right,
-            "r2_threshold": r2_threshold,
-            "1kg": True,
+            "r2_threshold": r2_threshold, "1kg": True,
         })
 
     regions_raw = pd.DataFrame(regions)
-    regions_raw["hg38id_short"] = (
-        ["chr"] * len(regions_raw)
-        + regions_raw["chr"].astype(str)
-        + ["_"] * len(regions_raw)
-        + regions_raw["lead_bp"].astype(str)
-    )
+    regions_raw["hg38id_short"] = "chr" + regions_raw["chr"].astype(str) + "_" + regions_raw["lead_bp"].astype(str)
 
-    print(f" [regions] {regions_raw[regions_raw['1kg'] == False].shape[0]} leads not in 1KG")
-    print(f" [regions] {regions_raw[regions_raw['size'] == 0].shape[0]} leads have no r2 at threshold {r2_threshold}")
+    print(f" [regions] {(~regions_raw['1kg']).sum()} leads not in 1KG")
+    print(f" [regions] {(regions_raw['size'] == 0).sum()} leads have no r2 at threshold {r2_threshold}")
 
     if save_path:
         print(f" [regions] Exporting {regions_raw.shape[0]} regions to {save_path}")
         regions_raw.to_csv(save_path, sep="\t", index=False)
-    
+
     return regions_raw
+
+# def build_raw_regions(leads: pd.DataFrame, r2: pd.DataFrame, r2_threshold: float,  save_path:str=None) -> pd.DataFrame:
+#     """
+#     Demarcate lead-variant centered regions for a single r2 threshold.
+#     Algorithm: Find the furthest variant 'left' and 'right' of the lead with an r2 to that lead
+#     being higher than the threshold.
+#     r2_threshold: float, e.g. 0.6 (rerun the script with a different value to compare thresholds).
+#     """
+#     ids_a = set(r2["ID_A"])
+#     linked = r2[r2["PHASED_R2"] > r2_threshold]
+#     regions = []
+
+#     leads_in_1kg = pd.read_csv('3_variants/leads_in_1kg.txt', header=None, names=['ID'])
+
+#     for lead_id in set(leads["ID"]):
+
+#         # If lead id NOT in subset of 1000G
+#         if lead_id not in list(leads_in_1kg['ID']):
+#             chr_ = leads[leads["ID"] == lead_id]["CHR"].values[0]
+#             lead = leads[leads["ID"] == lead_id]["BP"].values[0]
+#             regions.append({
+#                 "chr": chr_,
+#                 "lead_id": lead_id,
+#                 "lead_bp": lead,
+#                 "left_raw": lead,
+#                 "right_raw": lead,
+#                 "left_dist": 0,
+#                 "right_dist": 0,
+#                 "size": 0,
+#                 "r2_threshold": r2_threshold,
+#                 "1kg": False,
+#             })
+#             continue
+
+#         r2_block = linked[linked["ID_A"] == lead_id]
+#         linked_ids = set(r2_block["ID_A"])
+
+#         # Has no r2 with any variant at this threshold
+#         if lead_id not in linked_ids:
+#             chr_ = leads[leads["ID"] == lead_id]["CHR"].values[0]
+#             lead = leads[leads["ID"] == lead_id]["BP"].values[0]
+#             regions.append({
+#                 "chr": chr_,
+#                 "lead_id": lead_id,
+#                 "lead_bp": lead,
+#                 "left_raw": lead,
+#                 "right_raw": lead,
+#                 "left_dist": 0,
+#                 "right_dist": 0,
+#                 "size": 0,
+#                 "r2_threshold": r2_threshold,
+#                 "1kg": True,
+#             })
+#             continue
+
+#         # Has r2 with at leats one variant at this threshold
+#         chr_ = r2_block["#CHROM_A"].values[0]
+#         lead = r2_block["POS_A"].values[0]
+#         left_border = min([lead, min(r2_block["POS_B"])])
+#         right_border = max([lead, max(r2_block["POS_B"])])
+#         ld_left = max([0, r2_block["POS_A"].values[0] - left_border])
+#         ld_right = max([0, right_border - r2_block["POS_A"].values[0]])
+#         regions.append({
+#             "chr": chr_,
+#             "lead_id": lead_id,
+#             "lead_bp": lead,
+#             "left_raw": left_border,
+#             "right_raw": right_border,
+#             "left_dist": ld_left,
+#             "right_dist": ld_right,
+#             "size": ld_left + ld_right,
+#             "r2_threshold": r2_threshold,
+#             "1kg": True,
+#         })
+
+#     regions_raw = pd.DataFrame(regions)
+#     regions_raw["hg38id_short"] = (
+#         ["chr"] * len(regions_raw)
+#         + regions_raw["chr"].astype(str)
+#         + ["_"] * len(regions_raw)
+#         + regions_raw["lead_bp"].astype(str)
+#     )
+
+#     print(f" [regions] {regions_raw[regions_raw['1kg'] == False].shape[0]} leads not in 1KG")
+#     print(f" [regions] {regions_raw[regions_raw['size'] == 0].shape[0]} leads have no r2 at threshold {r2_threshold}")
+
+#     if save_path:
+#         print(f" [regions] Exporting {regions_raw.shape[0]} regions to {save_path}")
+#         regions_raw.to_csv(save_path, sep="\t", index=False)
+    
+#     return regions_raw
 
 
 def apply_buffer(regions_raw: pd.DataFrame, buffer_bp: int) -> pd.DataFrame:
@@ -174,6 +244,7 @@ def parse_args():
                               "to compare thresholds.")
     parser.add_argument("--buffer", type=int, default=1500,
                          help="Lower bound (bp) applied at each side of the lead variant")
+    parser.add_argument("--variants-in-1kg", type=str, default="3_variants/leads_in_1kg.txt")
     parser.add_argument("--project-root", type=Path, default=Path("."),
                          help="Root directory under which 1_plink/2_source/3_variants/"
                               "4_regions/5_figs live (used with --setup)")
@@ -183,12 +254,11 @@ def parse_args():
 def main():
     args = parse_args()
 
-    print(args.leads)
-
     leads = load_leads(args.project_root / args.leads)
     r2 = load_r2(args.project_root / args.r2)
 
-    regions_raw = build_raw_regions(leads, r2, args.r2_threshold, save_path = args.project_root / args.out_dir / "regions_0_raw.tsv")
+    regions_raw = build_raw_regions(leads, r2, args.r2_threshold, save_path = args.project_root / args.out_dir / "regions_0_raw.tsv",
+                                                                  leads_in_1kg = args.project_root / args.variants_in_1kg)
 
     regions_buffered = apply_buffer(regions_raw, args.buffer)
     regions_with_gene = add_nearest_gene(regions_buffered, leads)
