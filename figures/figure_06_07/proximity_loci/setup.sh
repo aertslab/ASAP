@@ -132,7 +132,7 @@ echo " [setup] Checking plink r-square output"
 if ! [ -f 1_plink/linkage.vcor ]; then
     echo "          - Calculating R2 of leads to 1KG variants using plink..."
     # awk -F'\t' 'NR>1 { print $1 }' 2_source/GP2_leads.tsv | sed 's/:/_/g'  > 2_source/GP2_leads.id
-    awk -F'\t' 'NR>1 { print $30 }' 2_source/GP2_leads.tsv > 2_source/GP2_leads.id
+    awk -F'\t' 'NR>1 { print $6 }' 2_source/GP2_leads.tsv > 2_source/GP2_leads.id
     echo
     1_plink/plink2 \
         --pfile 1_plink/1KG.T2T \

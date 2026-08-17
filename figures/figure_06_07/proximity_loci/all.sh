@@ -22,3 +22,7 @@ conda run -n PROX --no-capture-output python null_tail.py \
                   --threshold 0.5
 
 conda run -n PROX --no-capture-output python null_peaks.py
+
+echo
+echo " Script ran."
+echo

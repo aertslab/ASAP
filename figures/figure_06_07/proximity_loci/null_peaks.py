@@ -31,12 +31,6 @@ def main():
 
     draw_dict = pk.load(open("6_enrichment/draw_dict.pkl","rb"))
 
-    # Load consensus peaks as reference
-    consensus = pd.read_csv('/lustre1/project/stg_00090/ASA/analysis/2024_T2T_ATAC_analysis/2026_full_dataset/all/out/combined_consensus_peaks_500bp.bed',
-                    sep='\t', header=None, names=['chr','start','end','name','height'])
-    consensus['peak_id'] = consensus.apply(lambda r: f"{r['chr']}:{r['start']}-{r['end']}", axis=1)
-    print(f" [peaks] Loaded {consensus.shape[0]} consensus peaks (cell type & tissue stratified)")
-
     # Stratify peak count distributions per tissue & cell type
     unique_tissues = pip5[['region','cell_type']].unique()
     for tissue, cell_type in unique_tissues.filter(pl.col("cell_type").is_in(["Oligo","Micro-PVM"])).iter_rows():

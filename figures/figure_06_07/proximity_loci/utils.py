@@ -10,6 +10,11 @@ import numpy as np
 import pysam
 
 
+############################################
+######## CLAUDE GENERATED FUNCTIONS ########
+############################################
+
+
 COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
 
 def revcomp(seq: str) -> str:
@@ -251,8 +256,8 @@ def sample_null_regions(reference_metrics, candidate_metrics, locus_col="locus_i
             edges = _exp_bin_edges(finite_values, n_bins)
         # Hard guarantee regardless of which branch/degenerate case produced
         # `edges`: never extend beyond the true observed reference range.
-        edges[0] = min(edges[0], true_min)
-        edges[-1] = true_max
+        # edges[0] = min(edges[0], true_min)
+        # edges[-1] = true_max
  
         bin_edges[col] = edges
         bin_col = f"{col}_bin"

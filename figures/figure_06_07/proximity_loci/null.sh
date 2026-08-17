@@ -137,4 +137,9 @@ if ! [ -f 6_enrichment/draw_dict.pkl ]; then
     conda run -n PROX --no-capture-output python null_loci.py --peaks-df "$PEAKS_DF"
 fi
 
+
+echo
+echo " Loci bootstrap sets construction done."
+echo
+echo " ======================================================================================================================"
 echo
